@@ -1,15 +1,7 @@
 use std::collections::{HashMap, HashSet};
 
-use swc_core::ecma::ast::{Callee, CallExpr, Ident};
+use swc_core::ecma::ast::{CallExpr, Callee, Ident};
 use swc_core::ecma::visit::{Visit, VisitWith};
-
-#[derive(Eq, Hash, PartialEq, Debug)]
-pub enum GettextOption {
-    Gettext,
-    Ngettext,
-    Pgettext,
-    Npgettext,
-}
 
 #[derive(Debug)]
 pub struct Message {
@@ -27,7 +19,7 @@ pub struct Stats {
     pub context: usize,
     pub files_parsed: usize,
     pub files_with_messages: usize,
-    pub usage_breakdown: HashMap<GettextOption, usize>,
+    pub usage_breakdown: HashMap<String, usize>,
 }
 
 #[derive(Debug)]
@@ -36,89 +28,60 @@ pub struct Visitor {
     pub current_file: String,
     pub visited_files_with_messages: HashSet<String>,
     pub stats: Stats,
+    pub functions: Option<HashMap<String, Function>>,
+}
+
+#[derive(Debug, Clone)]
+pub struct Function {
+    pub text: Option<usize>,
+    pub context: Option<usize>,
+    pub plural: Option<usize>,
 }
 
 impl Visitor {
-    fn add_message(&mut self, sym: GettextOption, node: &CallExpr) {
-        let message = match sym {
-            GettextOption::Gettext => {
-                let context = String::from("");
-
-                if let Some(first_arg) = crate::get_argument(node.args.first()) {
-                    let text = first_arg.value.to_string();
-                    let text_plural = None;
-
-                    Some(Message {
-                        text,
-                        text_plural,
-                        context,
-                        references: HashSet::new(),
-                    })
-                } else {
-                    None
-                }
-            }
-            GettextOption::Ngettext => {
-                let context = String::from("");
-                if let Some(first_arg) = crate::get_argument(node.args.first()) {
-                    let text = first_arg.value.to_string();
-                    let text_plural = Some(crate::get_argument(node.args.get(1)).unwrap().value.to_string());
-
-                    Some(Message {
-                        text,
-                        text_plural,
-                        context,
-                        references: HashSet::new(),
-                    })
-                } else {
-                    None
-                }
-            }
-            GettextOption::Pgettext => {
-                if let Some(first_arg) = crate::get_argument(node.args.first()) {
-                    let context = first_arg.value.to_string();
-                    let text = crate::get_argument(node.args.get(1)).unwrap().value.to_string();
-                    let text_plural = None;
-
-                    Some(Message {
-                        text,
-                        text_plural,
-                        context,
-                        references: HashSet::new(),
-                    })
-                } else {
-                    None
-                }
-            }
-            GettextOption::Npgettext => {
-                if let Some(first_arg) = crate::get_argument(node.args.first()) {
-                    let context = first_arg.value.to_string();
-                    let text = crate::get_argument(node.args.get(1)).unwrap().value.to_string();
-                    let text_plural = Some(crate::get_argument(node.args.get(2)).unwrap().value.to_string());
-
-                    Some(Message {
-                        text,
-                        text_plural,
-                        context,
-                        references: HashSet::new(),
-                    })
-                } else {
-                    None
-                }
-            }
+    fn add_message(&mut self, key: String, fun: Function, node: &CallExpr) {
+        let text = match fun.text {
+            Some(text) => crate::get_argument(node.args.get(text)).map(|arg| arg.value.to_string()),
+            None => None,
         };
 
-        if let Some(msg) = message {
-            self.stats.usages += 1;
-            self.stats.usage_breakdown
-                .entry(sym)
-                .and_modify(|e| *e += 1)
-                .or_insert(1);
-
-            self.visited_files_with_messages.insert(self.current_file.clone());
-            self.stats.files_with_messages = self.visited_files_with_messages.len();
-            self.add_to_catalog(msg);
+        if text.is_none() {
+            return;
         }
+
+        let context = match fun.context {
+            Some(context) => match crate::get_argument(node.args.get(context)) {
+                Some(arg) => arg.value.to_string(),
+                None => String::from(""),
+            },
+            None => String::from(""),
+        };
+
+        let text_plural = match fun.plural {
+            Some(plural) => {
+                crate::get_argument(node.args.get(plural)).map(|arg| arg.value.to_string())
+            }
+            None => None,
+        };
+
+        let message = Message {
+            text: text.unwrap(),
+            text_plural,
+            context,
+            references: HashSet::new(),
+        };
+
+        self.stats.usages += 1;
+        self.stats
+            .usage_breakdown
+            .entry(key)
+            .and_modify(|e| *e += 1)
+            .or_insert(1);
+
+        self.visited_files_with_messages
+            .insert(self.current_file.clone());
+        self.stats.files_with_messages = self.visited_files_with_messages.len();
+        self.add_to_catalog(message);
     }
 
     fn add_to_catalog(&mut self, message: Message) {
@@ -133,7 +96,8 @@ impl Visitor {
             self.stats.context += 1;
         }
 
-        let context_map = self.contexts
+        let context_map = self
+            .contexts
             .entry(context.clone())
             .or_insert_with(HashMap::new);
 
@@ -146,23 +110,34 @@ impl Visitor {
                 self.stats.plural += 1;
             }
 
-            context_map.insert(text.clone(), Message {
-                text,
-                text_plural,
-                context,
-                references: HashSet::from([self.current_file.clone()]),
-            });
+            context_map.insert(
+                text.clone(),
+                Message {
+                    text,
+                    text_plural,
+                    context,
+                    references: HashSet::from([self.current_file.clone()]),
+                },
+            );
         }
     }
 
     fn parse_gettext(&mut self, node: &CallExpr, ident: &Ident) {
-        match ident.sym.to_string().as_str() {
-            "gettext" => self.add_message(GettextOption::Gettext, node),
-            "ngettext" => self.add_message(GettextOption::Ngettext, node),
-            "pgettext" => self.add_message(GettextOption::Pgettext, node),
-            "npgettext" => self.add_message(GettextOption::Npgettext, node),
-            _ => {}
-        };
+        if let Some(function) = self.functions.clone() {
+            for key in function.keys() {
+                if key == ident.sym.to_string().as_str() {
+                    self.add_message(
+                        key.clone(),
+                        Function {
+                            text: function.get(key).unwrap().text,
+                            context: function.get(key).unwrap().context,
+                            plural: function.get(key).unwrap().plural,
+                        },
+                        node,
+                    );
+                }
+            }
+        }
     }
 }
 

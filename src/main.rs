@@ -4,8 +4,8 @@ extern crate swc_ecma_parser;
 
 use swc_common::{
     errors::{ColorConfig, Handler},
-    SourceMap,
     sync::Lrc,
+    SourceMap,
 };
 use swc_core::ecma::ast::{EsVersion, ExprOrSpread, Lit, Str};
 use swc_ecma_parser::{lexer::Lexer, Parser, StringInput, Syntax, TsConfig};
@@ -43,6 +43,7 @@ fn main() {
             visited_files_with_messages: Default::default(),
             current_file: Default::default(),
             contexts: Default::default(),
+            functions: None,
             stats: Stats {
                 messages: 0,
                 plural: 0,
@@ -55,7 +56,9 @@ fn main() {
         },
     };
 
-    for file in navigator.build() {
+    let files = navigator.build();
+
+    for file in files {
         let source_file = cm.load_file(file.path()).unwrap();
         let mut parser = Parser::new_from(Lexer::new(
             syntax,
@@ -83,4 +86,3 @@ fn main() {
 
     navigator.output();
 }
-
