@@ -95,7 +95,7 @@ impl Visitor {
                     let context = first_arg.value.to_string();
                     let text = crate::get_argument(node.args.get(1)).unwrap().value.to_string();
                     let text_plural = Some(crate::get_argument(node.args.get(2)).unwrap().value.to_string());
-                    dbg!(&text);
+
                     Some(Message {
                         text,
                         text_plural,

@@ -80,6 +80,7 @@ fn main() {
             }
         };
     }
+
     navigator.output();
 }
 

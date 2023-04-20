@@ -1,3 +1,4 @@
+use std::fs::File;
 use clap::Parser;
 use globwalk::{DirEntry, GlobWalkerBuilder};
 use swc_core::ecma::ast::Module;
@@ -6,16 +7,18 @@ use swc_core::ecma::visit::Visit;
 use crate::visitor::Visitor;
 
 #[derive(Parser)]
-#[command(author, version, about, long_about = None)]
 struct Args {
-    #[arg(short, long)]
-    base: String,
+    #[arg(short, long, required_unless_present("config"))]
+    base: Option<String>,
 
     #[arg(short, long)]
     exclude: Vec<String>,
 
     #[arg(short, long)]
     include: Vec<String>,
+
+    #[arg(short, long)]
+    config: Option<String>,
 }
 
 pub struct Navigator {
@@ -23,17 +26,66 @@ pub struct Navigator {
     pub files_walked: Vec<String>,
 }
 
+struct WalkerPatterns {
+    base: String,
+    patterns: Vec<String>,
+}
+
 impl Navigator {
     pub fn build(&mut self) -> Vec<DirEntry> {
-        let args = Args::parse();
-        let patterns: Vec<&String> = Vec::from_iter(args.include.iter().chain(args.exclude.iter()));
+        let WalkerPatterns { base, patterns } = self.get_walker_config();
 
-        GlobWalkerBuilder::from_patterns(&args.base, &patterns)
+        GlobWalkerBuilder::from_patterns(base, &patterns)
             .build()
             .unwrap()
             .into_iter()
             .filter_map(Result::ok)
             .collect()
+    }
+
+    fn get_walker_config(&mut self) -> WalkerPatterns {
+        let args = Args::parse();
+
+        if let Some(config) = args.config {
+            let file = File::open(config.as_str()).expect("file should open read only");
+            let json: serde_json::Value =
+                serde_json::from_reader(file).expect("JSON was not well-formatted");
+
+            let base = json.get("base").unwrap().as_str().unwrap();
+
+            let exclude = json.get("exclude").unwrap().as_array()
+                .unwrap()
+                .iter()
+                .map(|s| s.as_str().unwrap().to_string())
+                .collect::<Vec<String>>();
+
+            let include = json.get("include").unwrap().as_array().unwrap()
+                .iter()
+                .map(|s| s.as_str().unwrap().to_string())
+                .collect::<Vec<String>>();
+
+
+            let patterns = Vec::from_iter(include.iter().chain(exclude.iter()))
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+
+            WalkerPatterns {
+                base: base.to_string(),
+                patterns,
+            }
+        } else {
+            let base = args.base.unwrap();
+            let patterns = Vec::from_iter(args.include.iter().chain(args.exclude.iter()))
+                .iter()
+                .map(|s| s.to_string())
+                .collect();
+
+            WalkerPatterns {
+                base,
+                patterns,
+            }
+        }
     }
 
     pub fn parse(&mut self, module: &Module, path: String) {
