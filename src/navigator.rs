@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 use std::fs::File;
+use std::vec::IntoIter;
 
 use clap::Parser;
 use globwalk::{DirEntry, GlobWalkerBuilder};
+use serde_json::Value;
 use swc_core::ecma::ast::Module;
 use swc_core::ecma::visit::Visit;
 
@@ -33,6 +35,11 @@ struct WalkerPatterns {
     patterns: Vec<String>,
 }
 
+enum ConfigProperty {
+    Include,
+    Exclude,
+}
+
 impl Navigator {
     pub fn build(&mut self) -> Vec<DirEntry> {
         let WalkerPatterns { base, patterns } = self.get_walker_config();
@@ -48,111 +55,114 @@ impl Navigator {
     fn get_walker_config(&mut self) -> WalkerPatterns {
         let args = Args::parse();
 
-        if let Some(config) = args.config {
-            let file = File::open(config.as_str()).expect("file should open read only");
-            let json: serde_json::Value =
-                serde_json::from_reader(file).expect("JSON was not well-formatted");
+        let a = match args.config {
+            Some(config) => {
+                let file = File::open(config.as_str()).expect("file should open read only");
+                let json: Value =
+                    serde_json::from_reader(file).expect("JSON was not well-formatted");
 
-            let base = json.get("base").unwrap().as_str().unwrap();
-            let base_function = json.get("functions").unwrap();
-            let functions = base_function
-                .clone()
-                .as_object_mut()
-                .unwrap()
-                .iter_mut()
-                .map(|(key, value)| {
-                    let text = Some(value.get("text").unwrap().as_u64().unwrap() as usize);
-                    let context = value.get("context").map(|c| c.as_u64().unwrap() as usize);
-                    let plural = value.get("plural").map(|c| c.as_u64().unwrap() as usize);
+                let functions = json
+                    .get("functions")
+                    .unwrap()
+                    .as_object()
+                    .unwrap()
+                    .iter()
+                    .map(|(key, value)| {
+                        let text = Some(value.get("text").unwrap().as_u64().unwrap() as usize);
+                        let context = value.get("context").map(|c| c.as_u64().unwrap() as usize);
+                        let plural = value.get("plural").map(|c| c.as_u64().unwrap() as usize);
 
-                    (
-                        key.to_string(),
-                        Function {
-                            text,
-                            context,
-                            plural,
-                        },
-                    )
-                })
-                .collect::<HashMap<String, Function>>();
+                        (
+                            key.to_string(),
+                            Function {
+                                text,
+                                context,
+                                plural,
+                            },
+                        )
+                    })
+                    .collect::<HashMap<String, Function>>();
 
-            self.visitor.functions = Some(functions);
+                let exclude = Self::get_config_property(json.clone(), ConfigProperty::Exclude);
+                let include = Self::get_config_property(json.clone(), ConfigProperty::Include);
 
-            let exclude = json
-                .get("exclude")
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|s| s.as_str().unwrap().to_string())
-                .collect::<Vec<String>>();
-
-            let include = json
-                .get("include")
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|s| s.as_str().unwrap().to_string())
-                .collect::<Vec<String>>();
-
-            let patterns = Vec::from_iter(include.iter().chain(exclude.iter()))
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
-
-            WalkerPatterns {
-                base: base.to_string(),
-                patterns,
+                (
+                    json.get("base").unwrap().as_str().unwrap().to_string(),
+                    functions,
+                    include.chain(exclude),
+                )
             }
-        } else {
-            let base = args.base.unwrap();
-            let patterns = Vec::from_iter(args.include.iter().chain(args.exclude.iter()))
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
+            None => {
+                let functions = HashMap::from([
+                    (
+                        "gettext".to_string(),
+                        Function {
+                            text: Some(0),
+                            context: None,
+                            plural: None,
+                        },
+                    ),
+                    (
+                        "ngettext".to_string(),
+                        Function {
+                            text: Some(0),
+                            context: None,
+                            plural: Some(1),
+                        },
+                    ),
+                    (
+                        "pgettext".to_string(),
+                        Function {
+                            text: Some(1),
+                            context: Some(0),
+                            plural: None,
+                        },
+                    ),
+                    (
+                        "npgettext".to_string(),
+                        Function {
+                            text: Some(1),
+                            context: Some(0),
+                            plural: Some(2),
+                        },
+                    ),
+                ]);
 
-            let functions = HashMap::from([
-                (
-                    "gettext".to_string(),
-                    Function {
-                        text: Some(0),
-                        context: None,
-                        plural: None,
-                    },
-                ),
-                (
-                    "ngettext".to_string(),
-                    Function {
-                        text: Some(0),
-                        context: None,
-                        plural: Some(1),
-                    },
-                ),
-                (
-                    "pgettext".to_string(),
-                    Function {
-                        text: Some(1),
-                        context: Some(0),
-                        plural: None,
-                    },
-                ),
-                (
-                    "npgettext".to_string(),
-                    Function {
-                        text: Some(1),
-                        context: Some(0),
-                        plural: Some(2),
-                    },
-                ),
-            ]);
+                println!("\n    Using default functions: {:?} \n", functions.keys());
 
-            println!("\n    Using default functions: {:?} \n", functions.keys());
+                (
+                    args.base.unwrap(),
+                    functions,
+                    args.include.into_iter().chain(args.exclude.into_iter()),
+                )
+            }
+        };
 
-            self.visitor.functions = Some(functions);
+        let patterns = Vec::from_iter(a.2.clone())
+            .iter()
+            .map(|s| s.to_string())
+            .collect();
 
-            WalkerPatterns { base, patterns }
+        self.visitor.functions = Some(a.1);
+        WalkerPatterns {
+            base: a.0,
+            patterns,
         }
+    }
+
+    fn get_config_property(json: Value, property: ConfigProperty) -> IntoIter<String> {
+        let json = match property {
+            ConfigProperty::Include => json.get("include"),
+            ConfigProperty::Exclude => json.get("exclude"),
+        };
+
+        json.unwrap()
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s.as_str().unwrap().to_string())
+            .collect::<Vec<String>>()
+            .into_iter()
     }
 
     pub fn parse(&mut self, module: &Module, path: String) {
