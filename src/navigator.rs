@@ -3,6 +3,7 @@ use std::fs::File;
 
 use clap::Parser;
 use globwalk::{DirEntry, GlobWalkerBuilder};
+use serde_json::Value;
 use swc_core::ecma::ast::Module;
 use swc_core::ecma::visit::Visit;
 
@@ -25,7 +26,6 @@ struct Args {
 
 pub struct Navigator {
     pub visitor: Visitor,
-    pub files_walked: Vec<String>,
 }
 
 struct WalkerPatterns {
@@ -39,8 +39,7 @@ impl Navigator {
 
         GlobWalkerBuilder::from_patterns(base, &patterns)
             .build()
-            .unwrap()
-            .into_iter()
+            .expect("Failed to build GlobWalker")
             .filter_map(Result::ok)
             .collect()
     }
@@ -50,66 +49,48 @@ impl Navigator {
 
         if let Some(config) = args.config {
             let file = File::open(config.as_str()).expect("file should open read only");
-            let json: serde_json::Value =
-                serde_json::from_reader(file).expect("JSON was not well-formatted");
+            let json: Value = serde_json::from_reader(file).expect("JSON was not well-formatted");
 
-            let base = json.get("base").unwrap().as_str().unwrap();
-            let base_function = json.get("functions").unwrap();
-            let functions = base_function
-                .clone()
-                .as_object_mut()
-                .unwrap()
-                .iter_mut()
+            let functions = json
+                .get("functions")
+                .expect("Missing 'functions' field in JSON")
+                .as_object()
+                .expect("'functions' field is not an object in JSON")
+                .iter()
                 .map(|(key, value)| {
-                    let text = Some(value.get("text").unwrap().as_u64().unwrap() as usize);
-                    let context = value.get("context").map(|c| c.as_u64().unwrap() as usize);
-                    let plural = value.get("plural").map(|c| c.as_u64().unwrap() as usize);
-
                     (
                         key.to_string(),
                         Function {
-                            text,
-                            context,
-                            plural,
+                            text: Self::get_usize(value, "text"),
+                            context: Self::get_usize(value, "context"),
+                            plural: Self::get_usize(value, "plural"),
                         },
                     )
                 })
-                .collect::<HashMap<String, Function>>();
+                .collect();
 
             self.visitor.functions = Some(functions);
 
-            let exclude = json
-                .get("exclude")
-                .unwrap()
-                .as_array()
-                .unwrap()
+            let patterns = ["include", "exclude"]
                 .iter()
-                .map(|s| s.as_str().unwrap().to_string())
-                .collect::<Vec<String>>();
-
-            let include = json
-                .get("include")
-                .unwrap()
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|s| s.as_str().unwrap().to_string())
-                .collect::<Vec<String>>();
-
-            let patterns = Vec::from_iter(include.iter().chain(exclude.iter()))
-                .iter()
-                .map(|s| s.to_string())
+                .flat_map(|key| Self::get_pattern_vec(&json, key))
                 .collect();
 
             WalkerPatterns {
-                base: base.to_string(),
+                base: json
+                    .get("base")
+                    .and_then(|v| v.as_str())
+                    .map(String::from)
+                    .expect("Invalid or missing 'base' field in JSON"),
                 patterns,
             }
         } else {
             let base = args.base.unwrap();
-            let patterns = Vec::from_iter(args.include.iter().chain(args.exclude.iter()))
+            let patterns = args
+                .include
                 .iter()
-                .map(|s| s.to_string())
+                .chain(&args.exclude)
+                .map(ToString::to_string)
                 .collect();
 
             let functions = HashMap::from([
@@ -155,6 +136,25 @@ impl Navigator {
         }
     }
 
+    fn get_pattern_vec(json: &Value, key: &str) -> Vec<String> {
+        json.get(key)
+            .and_then(|value| value.as_array())
+            .map(|array| {
+                array
+                    .iter()
+                    .filter_map(|value| value.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_else(|| panic!("Missing or invalid '{}' field in JSON", key))
+    }
+
+    pub fn get_usize(value: &Value, index: &str) -> Option<usize> {
+        value
+            .get(index)
+            .and_then(|v| v.as_u64())
+            .map(|v| v as usize)
+    }
+
     pub fn parse(&mut self, module: &Module, path: String) {
         self.visitor.stats.files_parsed += 1;
         self.visitor.current_file = path;
@@ -167,9 +167,13 @@ impl Navigator {
         println!("    {:?} messages extracted", self.visitor.stats.messages);
         println!("  -------------------------------");
         println!("    {:?} total usages", self.visitor.stats.usages);
-        for (key, count) in self.visitor.stats.usage_breakdown.iter() {
-            println!("    ↳ {:?} {:?} usages", count, key);
-        }
+        self.visitor
+            .stats
+            .usage_breakdown
+            .iter()
+            .for_each(|(key, count)| {
+                println!("    ↳ {:?} {:?} usages", count, key);
+            });
         println!(
             "\n    {:?} files ({:?} with messages)",
             self.visitor.stats.files_parsed, self.visitor.stats.files_with_messages

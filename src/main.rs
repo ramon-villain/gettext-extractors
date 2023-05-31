@@ -17,10 +17,10 @@ mod navigator;
 mod visitor;
 
 pub fn get_argument(node: Option<&ExprOrSpread>) -> Option<&Str> {
-    if let Lit::Str(singular) = node?.expr.as_lit()? {
-        return Some(singular);
-    }
-    None
+    node?.expr.as_lit().and_then(|lit| match lit {
+        Lit::Str(singular) => Some(singular),
+        _ => None,
+    })
 }
 
 fn main() {
@@ -38,28 +38,17 @@ fn main() {
     let handler = Handler::with_tty_emitter(ColorConfig::Auto, true, false, Some(cm.clone()));
 
     let mut navigator = Navigator {
-        files_walked: vec![],
         visitor: Visitor {
             visited_files_with_messages: Default::default(),
             current_file: Default::default(),
             contexts: Default::default(),
             functions: None,
-            stats: Stats {
-                messages: 0,
-                plural: 0,
-                usages: 0,
-                context: 0,
-                files_parsed: 0,
-                files_with_messages: 0,
-                usage_breakdown: Default::default(),
-            },
+            stats: Stats::default(),
         },
     };
 
-    let files = navigator.build();
-
-    for file in files {
-        let source_file = cm.load_file(file.path()).unwrap();
+    navigator.build().iter().for_each(|file| {
+        let source_file = cm.load_file(file.path()).expect("Failed to load file");
         let mut parser = Parser::new_from(Lexer::new(
             syntax,
             EsVersion::latest(),
@@ -82,7 +71,7 @@ fn main() {
                 e.into_diagnostic(&handler).emit();
             }
         };
-    }
+    });
 
     navigator.output();
 }
