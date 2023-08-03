@@ -1,6 +1,5 @@
 use std::collections::{HashMap, HashSet};
-
-use swc_core::ecma::ast::{CallExpr, Callee, Ident};
+use swc_core::ecma::ast::{Callee, CallExpr, Ident};
 use swc_core::ecma::visit::{Visit, VisitWith};
 
 #[derive(Debug)]
@@ -106,9 +105,7 @@ impl Visitor {
             entry.references.insert(self.current_file.clone());
         } else {
             self.stats.messages += 1;
-            if text_plural.is_some() {
-                self.stats.plural += 1;
-            }
+            self.stats.plural += text_plural.is_some() as usize;
 
             context_map.insert(
                 text.clone(),
@@ -123,19 +120,17 @@ impl Visitor {
     }
 
     fn parse_gettext(&mut self, node: &CallExpr, ident: &Ident) {
-        if let Some(function) = self.functions.clone() {
-            for key in function.keys() {
-                if key == ident.sym.to_string().as_str() {
-                    self.add_message(
-                        key.clone(),
-                        Function {
-                            text: function.get(key).unwrap().text,
-                            context: function.get(key).unwrap().context,
-                            plural: function.get(key).unwrap().plural,
-                        },
-                        node,
-                    );
-                }
+        if let Some(functions) = &self.functions {
+            if let Some(function) = functions.get(ident.sym.as_ref()) {
+                self.add_message(
+                    ident.sym.to_string(),
+                    Function {
+                        text: function.text,
+                        context: function.context,
+                        plural: function.plural,
+                    },
+                    node,
+                );
             }
         }
     }
