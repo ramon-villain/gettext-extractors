@@ -3,6 +3,7 @@ use std::fs::File;
 
 use clap::Parser;
 use globwalk::{DirEntry, GlobWalkerBuilder};
+use serde_json::Value;
 use swc_core::ecma::ast::Module;
 use swc_core::ecma::visit::Visit;
 
@@ -53,8 +54,9 @@ impl Navigator {
             let json: serde_json::Value =
                 serde_json::from_reader(file).expect("JSON was not well-formatted");
 
-            let base = json.get("base").unwrap().as_str().unwrap();
-            let base_function = json.get("functions").unwrap();
+            let base_function = json
+                .get("functions")
+                .unwrap_or_else(|| panic!("Invalid or missing 'functions' field in JSON"));
             let functions = base_function
                 .clone()
                 .as_object_mut()
@@ -80,7 +82,7 @@ impl Navigator {
 
             let exclude = json
                 .get("exclude")
-                .unwrap()
+                .unwrap_or_else(|| panic!("Invalid or missing 'exclude' field in JSON"))
                 .as_array()
                 .unwrap()
                 .iter()
@@ -89,7 +91,7 @@ impl Navigator {
 
             let include = json
                 .get("include")
-                .unwrap()
+                .unwrap_or_else(|| panic!("Invalid or missing 'include' field in JSON"))
                 .as_array()
                 .unwrap()
                 .iter()
@@ -102,15 +104,16 @@ impl Navigator {
                 .collect();
 
             WalkerPatterns {
-                base: base.to_string(),
+                base: json
+                    .get("base")
+                    .and_then(Value::as_str)
+                    .map(String::from)
+                    .unwrap_or_else(|| panic!("Invalid or missing 'base' field in JSON")),
                 patterns,
             }
         } else {
             let base = args.base.unwrap();
-            let patterns = Vec::from_iter(args.include.iter().chain(args.exclude.iter()))
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
+            let patterns = args.include.iter().chain(&args.exclude).cloned().collect();
 
             let functions = HashMap::from([
                 (
@@ -167,9 +170,14 @@ impl Navigator {
         println!("    {:?} messages extracted", self.visitor.stats.messages);
         println!("  -------------------------------");
         println!("    {:?} total usages", self.visitor.stats.usages);
-        for (key, count) in self.visitor.stats.usage_breakdown.iter() {
-            println!("    ↳ {:?} {:?} usages", count, key);
+
+        let mut sorted_usage: Vec<(&String, &usize)> =
+            self.visitor.stats.usage_breakdown.iter().collect();
+        sorted_usage.sort_by(|a, b| a.0.cmp(b.0));
+        for (key, count) in &sorted_usage {
+            println!("    ↳ {:<5} {:?} usages", count, key);
         }
+
         println!(
             "\n    {:?} files ({:?} with messages)",
             self.visitor.stats.files_parsed, self.visitor.stats.files_with_messages
