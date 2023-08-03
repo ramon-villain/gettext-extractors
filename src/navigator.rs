@@ -54,7 +54,9 @@ impl Navigator {
             let json: serde_json::Value =
                 serde_json::from_reader(file).expect("JSON was not well-formatted");
 
-            let base_function = json.get("functions").unwrap();
+            let base_function = json
+                .get("functions")
+                .unwrap_or_else(|| panic!("Invalid or missing 'functions' field in JSON"));
             let functions = base_function
                 .clone()
                 .as_object_mut()
@@ -80,7 +82,7 @@ impl Navigator {
 
             let exclude = json
                 .get("exclude")
-                .unwrap()
+                .unwrap_or_else(|| panic!("Invalid or missing 'exclude' field in JSON"))
                 .as_array()
                 .unwrap()
                 .iter()
@@ -89,7 +91,7 @@ impl Navigator {
 
             let include = json
                 .get("include")
-                .unwrap()
+                .unwrap_or_else(|| panic!("Invalid or missing 'include' field in JSON"))
                 .as_array()
                 .unwrap()
                 .iter()
