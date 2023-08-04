@@ -80,17 +80,14 @@ impl Navigator {
             WalkerPatterns {
                 base: json
                     .get("base")
-                    .and_then(|v| v.as_str())
+                    .and_then(Value::as_str)
                     .map(String::from)
                     .expect("Invalid or missing 'base' field in JSON"),
                 patterns,
             }
         } else {
             let base = args.base.unwrap();
-            let patterns = Vec::from_iter(args.include.iter().chain(args.exclude.iter()))
-                .iter()
-                .map(|s| s.to_string())
-                .collect();
+            let patterns = args.include.iter().chain(&args.exclude).cloned().collect();
 
             let functions = HashMap::from([
                 (
@@ -137,7 +134,7 @@ impl Navigator {
 
     fn get_pattern_vec(json: &Value, key: &str) -> Vec<String> {
         json.get(key)
-            .and_then(|value| value.as_array())
+            .and_then(Value::as_array)
             .map(|array| {
                 array
                     .iter()
@@ -147,11 +144,8 @@ impl Navigator {
             .unwrap_or_else(|| panic!("Missing or invalid '{}' field in JSON", key))
     }
 
-    pub fn get_usize(value: &Value, index: &str) -> Option<usize> {
-        value
-            .get(index)
-            .and_then(|v| v.as_u64())
-            .map(|v| v as usize)
+    fn get_usize(value: &Value, index: &str) -> Option<usize> {
+        value.get(index).and_then(Value::as_u64).map(|v| v as usize)
     }
 
     pub fn parse(&mut self, module: &Module, path: String) {
@@ -166,9 +160,18 @@ impl Navigator {
         println!("    {:?} messages extracted", self.visitor.stats.messages);
         println!("  -------------------------------");
         println!("    {:?} total usages", self.visitor.stats.usages);
-        for (key, count) in self.visitor.stats.usage_breakdown.iter() {
-            println!("    ↳ {:?} {:?} usages", count, key);
+
+        let mut sorted_usage = self
+            .visitor
+            .stats
+            .usage_breakdown
+            .iter()
+            .collect::<Vec<_>>();
+        sorted_usage.sort_by(|a, b| b.1.cmp(a.1));
+        for (key, count) in &sorted_usage {
+            println!("    ↳ {:<5} {:?} usages", count, key);
         }
+
         println!(
             "\n    {:?} files ({:?} with messages)",
             self.visitor.stats.files_parsed, self.visitor.stats.files_with_messages

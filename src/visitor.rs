@@ -66,10 +66,7 @@ impl Visitor {
             context,
             ..
         } = message;
-
-        if !self.contexts.contains_key(&context) {
-            self.stats.context += 1;
-        }
+        self.stats.context += !self.contexts.contains_key(&context) as usize;
 
         let context_map = self
             .contexts
@@ -78,9 +75,7 @@ impl Visitor {
 
         let entry = context_map.entry(text.clone()).or_insert_with(|| {
             self.stats.messages += 1;
-            if text_plural.is_some() {
-                self.stats.plural += 1;
-            }
+            self.stats.plural += text_plural.is_some() as usize;
 
             Message {
                 text,
@@ -94,19 +89,17 @@ impl Visitor {
     }
 
     fn parse_gettext(&mut self, node: &CallExpr, ident: &Ident) {
-        if let Some(function) = self.functions.clone() {
-            for key in function.keys() {
-                if key == ident.sym.to_string().as_str() {
-                    self.add_message(
-                        key.clone(),
-                        Function {
-                            text: function.get(key).unwrap().text,
-                            context: function.get(key).unwrap().context,
-                            plural: function.get(key).unwrap().plural,
-                        },
-                        node,
-                    );
-                }
+        if let Some(functions) = &self.functions {
+            if let Some(function) = functions.get(ident.sym.as_ref()) {
+                self.add_message(
+                    ident.sym.to_string(),
+                    Function {
+                        text: function.text,
+                        context: function.context,
+                        plural: function.plural,
+                    },
+                    node,
+                );
             }
         }
     }
