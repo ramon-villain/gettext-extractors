@@ -26,7 +26,6 @@ struct Args {
 
 pub struct Navigator {
     pub visitor: Visitor,
-    pub files_walked: Vec<String>,
 }
 
 struct WalkerPatterns {
@@ -40,8 +39,7 @@ impl Navigator {
 
         GlobWalkerBuilder::from_patterns(base, &patterns)
             .build()
-            .unwrap()
-            .into_iter()
+            .expect("Failed to build GlobWalker")
             .filter_map(Result::ok)
             .collect()
     }
@@ -54,53 +52,29 @@ impl Navigator {
             let json: serde_json::Value =
                 serde_json::from_reader(file).expect("JSON was not well-formatted");
 
-            let base_function = json
+            let functions = json
                 .get("functions")
-                .unwrap_or_else(|| panic!("Invalid or missing 'functions' field in JSON"));
-            let functions = base_function
-                .clone()
-                .as_object_mut()
-                .unwrap()
-                .iter_mut()
+                .expect("Missing 'functions' field in JSON")
+                .as_object()
+                .expect("'functions' field is not an object in JSON")
+                .iter()
                 .map(|(key, value)| {
-                    let text = Some(value.get("text").unwrap().as_u64().unwrap() as usize);
-                    let context = value.get("context").map(|c| c.as_u64().unwrap() as usize);
-                    let plural = value.get("plural").map(|c| c.as_u64().unwrap() as usize);
-
                     (
                         key.to_string(),
                         Function {
-                            text,
-                            context,
-                            plural,
+                            text: Self::get_usize(value, "text"),
+                            context: Self::get_usize(value, "context"),
+                            plural: Self::get_usize(value, "plural"),
                         },
                     )
                 })
-                .collect::<HashMap<String, Function>>();
+                .collect();
 
             self.visitor.functions = Some(functions);
 
-            let exclude = json
-                .get("exclude")
-                .unwrap_or_else(|| panic!("Invalid or missing 'exclude' field in JSON"))
-                .as_array()
-                .unwrap()
+            let patterns = ["include", "exclude"]
                 .iter()
-                .map(|s| s.as_str().unwrap().to_string())
-                .collect::<Vec<String>>();
-
-            let include = json
-                .get("include")
-                .unwrap_or_else(|| panic!("Invalid or missing 'include' field in JSON"))
-                .as_array()
-                .unwrap()
-                .iter()
-                .map(|s| s.as_str().unwrap().to_string())
-                .collect::<Vec<String>>();
-
-            let patterns = Vec::from_iter(include.iter().chain(exclude.iter()))
-                .iter()
-                .map(|s| s.to_string())
+                .flat_map(|key| Self::get_pattern_vec(&json, key))
                 .collect();
 
             WalkerPatterns {
@@ -108,7 +82,7 @@ impl Navigator {
                     .get("base")
                     .and_then(Value::as_str)
                     .map(String::from)
-                    .unwrap_or_else(|| panic!("Invalid or missing 'base' field in JSON")),
+                    .expect("Invalid or missing 'base' field in JSON"),
                 patterns,
             }
         } else {
@@ -158,6 +132,22 @@ impl Navigator {
         }
     }
 
+    fn get_pattern_vec(json: &Value, key: &str) -> Vec<String> {
+        json.get(key)
+            .and_then(Value::as_array)
+            .map(|array| {
+                array
+                    .iter()
+                    .filter_map(|value| value.as_str().map(String::from))
+                    .collect()
+            })
+            .unwrap_or_else(|| panic!("Missing or invalid '{}' field in JSON", key))
+    }
+
+    fn get_usize(value: &Value, index: &str) -> Option<usize> {
+        value.get(index).and_then(Value::as_u64).map(|v| v as usize)
+    }
+
     pub fn parse(&mut self, module: &Module, path: String) {
         self.visitor.stats.files_parsed += 1;
         self.visitor.current_file = path;
@@ -171,9 +161,13 @@ impl Navigator {
         println!("  -------------------------------");
         println!("    {:?} total usages", self.visitor.stats.usages);
 
-        let mut sorted_usage: Vec<(&String, &usize)> =
-            self.visitor.stats.usage_breakdown.iter().collect();
-        sorted_usage.sort_by(|a, b| a.0.cmp(b.0));
+        let mut sorted_usage = self
+            .visitor
+            .stats
+            .usage_breakdown
+            .iter()
+            .collect::<Vec<_>>();
+        sorted_usage.sort_by(|a, b| b.1.cmp(a.1));
         for (key, count) in &sorted_usage {
             println!("    ↳ {:<5} {:?} usages", count, key);
         }
